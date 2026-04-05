@@ -229,7 +229,7 @@ export function ChatShell({ title, description }: ChatShellProps) {
         </div>
         <div className="topbar-actions">
           <p className="topbar-note">
-            응답 끊기는건 나도 ㅁ?ㄹ
+            최대컨텍, 최대응답 크기 존나 작게 세팅됨 
           </p>
           <button className="ghost-button" type="button" onClick={resetConversation}>
             새 대화
