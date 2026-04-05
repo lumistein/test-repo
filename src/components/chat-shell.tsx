@@ -220,7 +220,7 @@ export function ChatShell({ title, description }: ChatShellProps) {
     <main className="page-shell">
       <header className="topbar">
         <div className="title-block">
-          <span className="eyebrow">PUBLIC CHAT</span>
+          <span className="eyebrow">Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf</span>
           <div className="title-row">
             <h1>{title}</h1>
             <span className="status-pill">Streaming</span>
