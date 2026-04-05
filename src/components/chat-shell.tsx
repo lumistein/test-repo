@@ -49,9 +49,6 @@ export function ChatShell({ title, description }: ChatShellProps) {
   const [input, setInput] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(
-    null,
-  );
   const viewportRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -117,22 +114,13 @@ export function ChatShell({ title, description }: ChatShellProps) {
       role: "user",
       content,
     };
-    const assistantMessageId = makeId();
 
     const nextMessages = [...messages, nextUserMessage];
 
-    setMessages([
-      ...nextMessages,
-      {
-        id: assistantMessageId,
-        role: "assistant",
-        content: "",
-      },
-    ]);
+    setMessages(nextMessages);
     setInput("");
     setError("");
     setIsLoading(true);
-    setStreamingMessageId(assistantMessageId);
 
     try {
       const response = await fetch("/api/chat", {
@@ -152,51 +140,29 @@ export function ChatShell({ title, description }: ChatShellProps) {
         throw new Error(await readErrorMessage(response));
       }
 
-      if (!response.body) {
-        throw new Error("스트리밍 응답 본문이 비어 있습니다.");
-      }
+      const payload = (await response.json()) as {
+        reply?: string;
+        error?: string;
+        details?: string;
+      };
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let reply = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) {
-          break;
-        }
-
-        reply += decoder.decode(value, { stream: true });
-
-        setMessages((current) =>
-          current.map((message) =>
-            message.id === assistantMessageId
-              ? { ...message, content: reply }
-              : message,
-          ),
+      if (!payload.reply) {
+        throw new Error(
+          payload.error ?? payload.details ?? "응답을 가져오지 못했습니다.",
         );
       }
 
-      reply += decoder.decode();
-
-      if (!reply.trim()) {
-        throw new Error("모델 응답이 비어 있습니다.");
-      }
-
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === assistantMessageId
-            ? { ...message, content: reply }
-            : message,
-        ),
-      );
+      setMessages((current) => [
+        ...current,
+        {
+          id: makeId(),
+          role: "assistant",
+          content: payload.reply ?? "",
+        },
+      ]);
     } catch (requestError) {
       setMessages((current) =>
-        current.filter(
-          (message) =>
-            message.id !== assistantMessageId || message.content.trim().length > 0,
-        ),
+        current.filter((message) => message.id !== nextUserMessage.id),
       );
       setError(
         requestError instanceof Error
@@ -205,14 +171,12 @@ export function ChatShell({ title, description }: ChatShellProps) {
       );
     } finally {
       setIsLoading(false);
-      setStreamingMessageId(null);
     }
   }
 
   function resetConversation() {
     setMessages([]);
     setError("");
-    setStreamingMessageId(null);
     window.localStorage.removeItem(storageKey);
   }
 
@@ -220,16 +184,15 @@ export function ChatShell({ title, description }: ChatShellProps) {
     <main className="page-shell">
       <header className="topbar">
         <div className="title-block">
-          <span className="eyebrow">PUBLIC CHAT</span>
+          <span className="eyebrow">Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf</span>
           <div className="title-row">
             <h1>{title}</h1>
-            <span className="status-pill">Streaming</span>
           </div>
           <p>{description}</p>
         </div>
         <div className="topbar-actions">
           <p className="topbar-note">
-            응답 끊기는건 나도 ㅁ?ㄹ
+            최대컨텍, 최대응답 크기 존나 작게 세팅됨
           </p>
           <button className="ghost-button" type="button" onClick={resetConversation}>
             새 대화
@@ -273,27 +236,24 @@ export function ChatShell({ title, description }: ChatShellProps) {
             </div>
           ) : (
             messages.map((message) => (
-              <article
-                key={message.id}
-                className={`message message-${message.role} ${
-                  message.id === streamingMessageId ? "message-streaming" : ""
-                }`}
-              >
+              <article key={message.id} className={`message message-${message.role}`}>
                 <span className="message-role">
                   {message.role === "user" ? "YOU" : "MODEL"}
                 </span>
                 <MessageContent
-                  content={
-                    message.content ||
-                    (message.id === streamingMessageId
-                      ? "응답을 불러오는 중입니다"
-                      : "")
-                  }
+                  content={message.content}
                   rich={message.role === "assistant"}
                 />
               </article>
             ))
           )}
+
+          {isLoading ? (
+            <article className="message message-assistant loading-message">
+              <span className="message-role">MODEL</span>
+              <MessageContent content="응답을 생성하는 중입니다..." rich />
+            </article>
+          ) : null}
         </div>
 
         <form className="composer" onSubmit={handleSubmit}>
@@ -316,9 +276,7 @@ export function ChatShell({ title, description }: ChatShellProps) {
           />
 
           <div className="composer-footer">
-            <p className="helper-text">
-              {isLoading ? "스트리밍 중..." : "Shift + Enter로 줄바꿈"}
-            </p>
+            <p className="helper-text">Shift + Enter로 줄바꿈</p>
             <button className="send-button" type="submit" disabled={!canSend}>
               {isLoading ? "생성 중" : "보내기"}
             </button>

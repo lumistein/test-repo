@@ -13,17 +13,6 @@ type UpstreamTextPart = {
   type?: string;
 };
 
-type UpstreamStreamPayload = {
-  choices?: Array<{
-    delta?: {
-      content?: unknown;
-    };
-    message?: {
-      content?: unknown;
-    };
-  }>;
-};
-
 function getRequiredEnv(name: string) {
   const value = process.env[name];
 
@@ -66,7 +55,7 @@ function sanitizeMessages(messages: unknown): ChatMessage[] {
 
 function extractAssistantText(content: unknown) {
   if (typeof content === "string") {
-    return content;
+    return content.trim();
   }
 
   if (Array.isArray(content)) {
@@ -82,39 +71,11 @@ function extractAssistantText(content: unknown) {
 
         return "";
       })
-      .join("");
+      .join("")
+      .trim();
   }
 
   return "";
-}
-
-function parseSseEvent(rawEvent: string) {
-  const data = rawEvent
-    .split("\n")
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trim())
-    .join("\n");
-
-  if (!data) {
-    return { done: false, text: "" };
-  }
-
-  if (data === "[DONE]") {
-    return { done: true, text: "" };
-  }
-
-  try {
-    const payload = JSON.parse(data) as UpstreamStreamPayload;
-
-    return {
-      done: false,
-      text:
-        extractAssistantText(payload.choices?.[0]?.delta?.content) ||
-        extractAssistantText(payload.choices?.[0]?.message?.content),
-    };
-  } catch {
-    return { done: false, text: "" };
-  }
 }
 
 export async function POST(request: Request) {
@@ -143,7 +104,7 @@ export async function POST(request: Request) {
         model,
         messages: chatMessages,
         temperature: 0.85,
-        stream: true,
+        stream: false,
       }),
       cache: "no-store",
     });
@@ -160,97 +121,23 @@ export async function POST(request: Request) {
       );
     }
 
-    const contentType = upstreamResponse.headers.get("content-type") ?? "";
+    const payload = (await upstreamResponse.json()) as {
+      choices?: Array<{
+        message?: {
+          content?: unknown;
+        };
+      }>;
+    };
+    const reply = extractAssistantText(payload.choices?.[0]?.message?.content);
 
-    if (contentType.includes("application/json")) {
-      const payload = (await upstreamResponse.json()) as UpstreamStreamPayload;
-      const reply = extractAssistantText(payload.choices?.[0]?.message?.content);
-
-      if (!reply.trim()) {
-        return NextResponse.json(
-          { error: "모델 응답을 해석하지 못했습니다." },
-          { status: 502 },
-        );
-      }
-
-      return new Response(reply, {
-        headers: {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-store, no-transform",
-        },
-      });
-    }
-
-    if (!upstreamResponse.body) {
+    if (!reply) {
       return NextResponse.json(
-        { error: "스트리밍 응답 본문이 비어 있습니다." },
+        { error: "모델 응답을 해석하지 못했습니다." },
         { status: 502 },
       );
     }
 
-    const upstreamReader = upstreamResponse.body.getReader();
-    const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        try {
-          while (true) {
-            const { done, value } = await upstreamReader.read();
-
-            if (done) {
-              break;
-            }
-
-            buffer += decoder.decode(value, { stream: true });
-            buffer = buffer.replace(/\r\n/g, "\n");
-
-            let separatorIndex = buffer.indexOf("\n\n");
-
-            while (separatorIndex !== -1) {
-              const rawEvent = buffer.slice(0, separatorIndex).trim();
-              buffer = buffer.slice(separatorIndex + 2);
-
-              const event = parseSseEvent(rawEvent);
-
-              if (event.text) {
-                controller.enqueue(encoder.encode(event.text));
-              }
-
-              if (event.done) {
-                controller.close();
-                return;
-              }
-
-              separatorIndex = buffer.indexOf("\n\n");
-            }
-          }
-
-          buffer += decoder.decode();
-
-          const trailingEvent = parseSseEvent(buffer.trim());
-
-          if (trailingEvent.text) {
-            controller.enqueue(encoder.encode(trailingEvent.text));
-          }
-
-          controller.close();
-        } catch (error) {
-          controller.error(error);
-        } finally {
-          upstreamReader.releaseLock();
-        }
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-store, no-transform",
-        "X-Accel-Buffering": "no",
-      },
-    });
+    return NextResponse.json({ reply });
   } catch (error) {
     const message =
       error instanceof Error
